@@ -4,6 +4,8 @@
 
 A lightweight Kubernetes log viewer for Windows, built as a companion to [OpenLens](https://github.com/MuhammedKalkan/OpenLens).
 
+<img style="width: 600px;" src="KLogScope.Docs/klogscope_screenshot.png">
+
 ## Installation
 
 Download the latest release from the [Releases](https://github.com/DanielMigchels/KLogScope/releases) page.
