@@ -1,12 +1,211 @@
-﻿<Window x:Class="KLogScope.MainWindow"
+﻿<Window x:Class="KubeLogViewer.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:KLogScope"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        xmlns:local="clr-namespace:KubeLogViewer"
+        Title="KubeLogViewer"
+        Height="800" Width="1300"
+        MinHeight="500" MinWidth="800"
+        Loaded="Window_Loaded"
+        Closing="Window_Closing">
 
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>   <!-- cluster bar -->
+            <RowDefinition Height="*"/>      <!-- main content -->
+            <RowDefinition Height="Auto"/>   <!-- status bar -->
+        </Grid.RowDefinitions>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             Cluster bar
+             ══════════════════════════════════════════════════════════════ -->
+        <Border Grid.Row="0" Background="#ECECEC"
+                BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Margin="8,5">
+                <TextBlock Text="Cluster:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox x:Name="ClusterComboBox" Width="280" VerticalAlignment="Center"
+                          DisplayMemberPath="DisplayName"
+                          SelectionChanged="ClusterComboBox_SelectionChanged"/>
+                <Button Content="Import OpenLens" Margin="10,0,4,0" Padding="8,3"
+                        Click="ImportOpenLens_Click"
+                        ToolTip="Scan well-known locations for OpenLens / Lens kubeconfigs"/>
+                <Button Content="Add Kubeconfig…" Margin="0,0,4,0" Padding="8,3"
+                        Click="AddKubeconfig_Click"/>
+                <Button Content="Remove" Padding="8,3"
+                        Click="RemoveCluster_Click"
+                        ToolTip="Remove the selected kubeconfig from the list"/>
+            </StackPanel>
+        </Border>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             Main content: left nav panel + right log panel
+             ══════════════════════════════════════════════════════════════ -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="210" MinWidth="140" MaxWidth="400"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ─── Left nav: Namespaces / Pods / Containers ─────────── -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="4"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="4"/>
+                    <RowDefinition Height="0.7*"/>
+                </Grid.RowDefinitions>
+
+                <GroupBox Grid.Row="0" Header="Namespaces" Padding="2" Margin="4,4,4,0">
+                    <ListBox x:Name="NamespaceList"
+                             SelectionChanged="NamespaceList_SelectionChanged"
+                             BorderThickness="0"/>
+                </GroupBox>
+
+                <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" Background="#D0D0D0"/>
+
+                <GroupBox Grid.Row="2" Header="Pods" Padding="2" Margin="4,0,4,0">
+                    <ListBox x:Name="PodList"
+                             SelectionChanged="PodList_SelectionChanged"
+                             BorderThickness="0"/>
+                </GroupBox>
+
+                <GridSplitter Grid.Row="3" HorizontalAlignment="Stretch" Background="#D0D0D0"/>
+
+                <GroupBox Grid.Row="4" Header="Containers" Padding="2" Margin="4,0,4,4">
+                    <ListBox x:Name="ContainerList"
+                             SelectionChanged="ContainerList_SelectionChanged"
+                             BorderThickness="0"/>
+                </GroupBox>
+            </Grid>
+
+            <GridSplitter Grid.Column="1" Width="4"
+                          HorizontalAlignment="Stretch" Background="#D0D0D0"/>
+
+            <!-- ─── Right: log toolbar + log viewer ──────────────────── -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Log toolbar -->
+                <Border Grid.Row="0" Background="#F5F5F5"
+                        BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+                    <WrapPanel Margin="6,5,6,5">
+
+                        <!-- Tail -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,2">
+                            <TextBlock Text="Tail:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                            <ComboBox x:Name="TailComboBox" Width="90" VerticalAlignment="Center"
+                                      SelectionChanged="TailComboBox_SelectionChanged">
+                                <ComboBoxItem Tag="100"  Content="Last 100"/>
+                                <ComboBoxItem Tag="500"  Content="Last 500" IsSelected="True"/>
+                                <ComboBoxItem Tag="1000" Content="Last 1000"/>
+                                <ComboBoxItem Tag="5000" Content="Last 5000"/>
+                                <ComboBoxItem Tag="-1"   Content="All"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <!-- Auto scroll -->
+                        <CheckBox x:Name="AutoScrollCheck" Content="Auto Scroll"
+                                  IsChecked="True" VerticalAlignment="Center"
+                                  Margin="0,0,14,2"/>
+
+                        <!-- Pause / Resume -->
+                        <Button x:Name="PauseBtn" Content="Pause" Padding="8,3"
+                                Margin="0,0,4,2" Click="PauseBtn_Click"/>
+
+                        <!-- Previous container -->
+                        <CheckBox x:Name="PreviousCheck" Content="Previous Container"
+                                  VerticalAlignment="Center" Margin="0,0,14,2"
+                                  ToolTip="Show logs from the previous (crashed/restarted) container run"
+                                  Checked="PreviousCheck_Changed"
+                                  Unchecked="PreviousCheck_Changed"/>
+
+                        <!-- Clear + Save -->
+                        <Button Content="Clear" Padding="8,3" Margin="0,0,4,2"
+                                Click="ClearBtn_Click"/>
+                        <Button Content="Save Logs" Padding="8,3" Margin="0,0,18,2"
+                                Click="SaveBtn_Click"/>
+
+                        <!-- Search -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
+                            <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                            <TextBox x:Name="SearchBox" Width="145" VerticalAlignment="Center"
+                                     TextChanged="SearchBox_TextChanged"/>
+                            <CheckBox x:Name="SearchCaseCheck" Content="Aa"
+                                      VerticalAlignment="Center" Margin="4,0,0,0"
+                                      ToolTip="Case sensitive search"
+                                      Checked="SearchCaseCheck_Changed"
+                                      Unchecked="SearchCaseCheck_Changed"/>
+                        </StackPanel>
+
+                        <!-- Filter -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
+                            <TextBlock Text="Filter:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                            <TextBox x:Name="FilterBox" Width="145" VerticalAlignment="Center"
+                                     TextChanged="FilterBox_TextChanged"/>
+                            <CheckBox x:Name="FilterCaseCheck" Content="Aa"
+                                      VerticalAlignment="Center" Margin="4,0,0,0"
+                                      ToolTip="Case sensitive filter"
+                                      Checked="FilterCaseCheck_Changed"
+                                      Unchecked="FilterCaseCheck_Changed"/>
+                        </StackPanel>
+
+                    </WrapPanel>
+                </Border>
+
+                <!-- Log viewer – virtualised for 100 k+ lines -->
+                <ListBox x:Name="LogView" Grid.Row="1"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Item"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.CanContentScroll="True"
+                         SelectionMode="Extended"
+                         BorderThickness="0"
+                         Background="White">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding"                    Value="2,0"/>
+                            <Setter Property="MinHeight"                   Value="16"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                            <!-- Remove the selection highlight so users can still copy text -->
+                            <Style.Triggers>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#CCE5FF"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Text}"
+                                       Background="{Binding HighlightBackground}"
+                                       FontFamily="Consolas" FontSize="12"
+                                       TextWrapping="NoWrap"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </Grid>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+             Status bar
+             ══════════════════════════════════════════════════════════════ -->
+        <StatusBar Grid.Row="2">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="Ready"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock x:Name="LineCountText" Text="0 lines"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock x:Name="ConnStatusText" Text="Not connected"/>
+            </StatusBarItem>
+        </StatusBar>
     </Grid>
 </Window>

@@ -6,6 +6,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <AssemblyName>KubeLogViewer</AssemblyName>
+    <RootNamespace>KubeLogViewer</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="KubernetesClient" Version="19.0.2" />
+  </ItemGroup>
 
 </Project>

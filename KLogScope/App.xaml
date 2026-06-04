@@ -1,9 +1,7 @@
-﻿<Application x:Class="KLogScope.App"
+﻿<Application x:Class="KubeLogViewer.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:KLogScope"
+             xmlns:local="clr-namespace:KubeLogViewer"
              StartupUri="MainWindow.xaml">
-    <Application.Resources>
-         
-    </Application.Resources>
+    <Application.Resources/>
 </Application>
