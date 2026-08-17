@@ -1,6 +1,8 @@
 ﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
+using System.Windows.Input;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -45,6 +47,9 @@ public partial class MainWindow : Window
     private          AppSettings               _settings    = new();
     private          CancellationTokenSource?  _streamCts;
     private          bool                      _paused;
+    private          Process?                  _podShellProcess;
+    private          CancellationTokenSource?  _podShellCts;
+    private          int                       _podTerminalInputStart;
 
     // Log buffers
     private readonly ObservableCollection<LogLine> _displayLines = new();
@@ -73,6 +78,8 @@ public partial class MainWindow : Window
         _flushTimer.Start();
 
         RefreshClusterList();
+        UpdatePodShellTargetText();
+        ResetPodTerminal();
 
         // Restore the previously-used cluster
         if (_settings.LastKubeconfigPath != null && _settings.LastContext != null)
@@ -92,6 +99,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         StopStream();
+        StopPodShellProcess();
         _flushTimer?.Stop();
 
         // Persist window state
@@ -233,6 +241,7 @@ public partial class MainWindow : Window
         SettingsService.Save(_settings);
 
         StopStream();
+        StopPodShellProcess();
         ClearLogs();
         NamespaceList.Items.Clear();
         PodList.Items.Clear();
@@ -247,6 +256,7 @@ public partial class MainWindow : Window
     {
         if (ClusterComboBox.SelectedItem is not ClusterItem item) return;
 
+        StopPodShellProcess();
         StopStream();
         ClearLogs();
         NamespaceList.Items.Clear();
@@ -279,6 +289,9 @@ public partial class MainWindow : Window
 
     private async void NamespaceList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        StopPodShellProcess();
+        UpdatePodShellTargetText();
+
         if (NamespaceList.SelectedItem is not string ns) return;
 
         StopStream();
@@ -302,6 +315,9 @@ public partial class MainWindow : Window
 
     private async void PodList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        StopPodShellProcess();
+        UpdatePodShellTargetText();
+
         if (PodList.SelectedItem is not string pod) return;
         if (NamespaceList.SelectedItem is not string ns) return;
 
@@ -328,6 +344,9 @@ public partial class MainWindow : Window
 
     private void ContainerList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        StopPodShellProcess();
+        UpdatePodShellTargetText();
+
         if (ContainerList.SelectedItem is not string) return;
         StartStream();
     }
@@ -611,5 +630,319 @@ public partial class MainWindow : Window
     {
         if (Dispatcher.CheckAccess()) action();
         else Dispatcher.Invoke(action);
+    }
+
+    // ─── Pod shell ───────────────────────────────────────────────────────────
+
+    private async void RunPodShellBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_podShellProcess is { HasExited: false })
+        {
+            SetStatus("Pod shell session already connected.");
+            return;
+        }
+
+        if (ClusterComboBox.SelectedItem is not ClusterItem cluster)
+        {
+            SetStatus("Select a cluster first.");
+            return;
+        }
+        if (NamespaceList.SelectedItem is not string ns)
+        {
+            SetStatus("Select a namespace first.");
+            return;
+        }
+        if (PodList.SelectedItem is not string pod)
+        {
+            SetStatus("Select a pod first.");
+            return;
+        }
+        if (ContainerList.SelectedItem is not string container)
+        {
+            SetStatus("Select a container first.");
+            return;
+        }
+
+        var shellPath = (PodShellComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "/bin/sh";
+        var psi = BuildInteractivePodShellStartInfo(cluster, ns, pod, container, shellPath);
+        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+
+        try
+        {
+            if (!process.Start())
+            {
+                SetStatus("Failed to start kubectl exec.");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Could not start kubectl. Ensure kubectl is installed and available in PATH.\n\n{ex.Message}",
+                "kubectl not available",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        _podShellProcess = process;
+        _podShellCts = new CancellationTokenSource();
+        process.StandardInput.NewLine = "\n";
+
+        RunShellBtn.IsEnabled = false;
+        StopShellBtn.IsEnabled = true;
+        PodTerminalBox.IsReadOnly = false;
+        PodTerminalBox.Focus();
+
+        AppendPodTerminalText($"Connected: {ns}/{pod}/{container}  ({shellPath})" + Environment.NewLine);
+        SetStatus($"Connected pod shell to {pod}/{container}.");
+
+        _ = Task.Run(() => PumpPodShellOutputAsync(process.StandardOutput, _podShellCts.Token));
+        _ = Task.Run(() => PumpPodShellOutputAsync(process.StandardError, _podShellCts.Token));
+
+        try
+        {
+            await process.WaitForExitAsync();
+            AppendPodTerminalText(Environment.NewLine + $"[session ended: exit {process.ExitCode}]" + Environment.NewLine);
+            SetStatus($"Pod shell disconnected (exit {process.ExitCode}).");
+        }
+        catch (Exception ex)
+        {
+            AppendPodTerminalText(Environment.NewLine + $"[pod shell error] {ex.Message}" + Environment.NewLine);
+            SetStatus("Pod shell failed.");
+        }
+        finally
+        {
+            process.Dispose();
+            if (ReferenceEquals(_podShellProcess, process))
+                _podShellProcess = null;
+
+            _podShellCts?.Cancel();
+            _podShellCts?.Dispose();
+            _podShellCts = null;
+
+            RunShellBtn.IsEnabled = true;
+            StopShellBtn.IsEnabled = false;
+            PodTerminalBox.IsReadOnly = true;
+            _podTerminalInputStart = PodTerminalBox.Text.Length;
+        }
+    }
+
+    private void StopPodShellBtn_Click(object sender, RoutedEventArgs e)
+    {
+        StopPodShellProcess();
+        SetStatus("Pod shell disconnected.");
+    }
+
+    private void ClearPodShellBtn_Click(object sender, RoutedEventArgs e)
+    {
+        ResetPodTerminal();
+        SetStatus("Pod terminal cleared.");
+    }
+
+    private ProcessStartInfo BuildInteractivePodShellStartInfo(
+        ClusterItem cluster,
+        string ns,
+        string pod,
+        string container,
+        string shellPath)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "kubectl",
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("--kubeconfig");
+        psi.ArgumentList.Add(cluster.KubeconfigPath);
+        psi.ArgumentList.Add("--context");
+        psi.ArgumentList.Add(cluster.ContextName);
+        psi.ArgumentList.Add("-n");
+        psi.ArgumentList.Add(ns);
+        psi.ArgumentList.Add("exec");
+        psi.ArgumentList.Add("-i");
+        psi.ArgumentList.Add(pod);
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(container);
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(shellPath);
+        psi.ArgumentList.Add("-i");
+
+        return psi;
+    }
+
+    private async Task PumpPodShellOutputAsync(StreamReader reader, CancellationToken ct)
+    {
+        var buffer = new char[256];
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+                if (read <= 0) break;
+                AppendPodTerminalText(new string(buffer, 0, read));
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // session is being stopped
+        }
+        catch (Exception ex)
+        {
+            AppendPodTerminalText(Environment.NewLine + $"[read error] {ex.Message}" + Environment.NewLine);
+        }
+    }
+
+    private void StopPodShellProcess()
+    {
+        _podShellCts?.Cancel();
+
+        var process = _podShellProcess;
+        if (process is null)
+            return;
+
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex)
+        {
+            AppendPodTerminalText(Environment.NewLine + $"[stop error] {ex.Message}" + Environment.NewLine);
+        }
+        finally
+        {
+            if (ReferenceEquals(_podShellProcess, process))
+                _podShellProcess = null;
+
+            RunShellBtn.IsEnabled = true;
+            StopShellBtn.IsEnabled = false;
+            PodTerminalBox.IsReadOnly = true;
+            _podTerminalInputStart = PodTerminalBox.Text.Length;
+        }
+    }
+
+    private void PodTerminalBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_podShellProcess is null || _podShellProcess.HasExited)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.C)
+        {
+            // If text is selected, let WPF copy it. If not, send Ctrl+C to the remote shell.
+            if (PodTerminalBox.SelectionLength > 0)
+                return;
+
+            e.Handled = true;
+            try
+            {
+                _podShellProcess.StandardInput.Write("\x3");
+                _podShellProcess.StandardInput.Flush();
+            }
+            catch { }
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            var current = PodTerminalBox.Text;
+            var command = current.Length >= _podTerminalInputStart
+                ? current[_podTerminalInputStart..]
+                : string.Empty;
+
+            // Remove local typed echo so the command appears only once when the remote shell echoes it.
+            if (current.Length >= _podTerminalInputStart)
+            {
+                PodTerminalBox.Text = current[.._podTerminalInputStart];
+                PodTerminalBox.CaretIndex = PodTerminalBox.Text.Length;
+            }
+
+            try
+            {
+                _podShellProcess.StandardInput.Write(command);
+                _podShellProcess.StandardInput.Write("\n");
+                _podShellProcess.StandardInput.Flush();
+            }
+            catch (Exception ex)
+            {
+                AppendPodTerminalText($"[write error] {ex.Message}" + Environment.NewLine);
+            }
+
+            return;
+        }
+
+        if (e.Key == Key.Back && PodTerminalBox.CaretIndex <= _podTerminalInputStart)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if ((e.Key == Key.Left || e.Key == Key.Home) && PodTerminalBox.CaretIndex <= _podTerminalInputStart)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (PodTerminalBox.SelectionStart < _podTerminalInputStart)
+        {
+            e.Handled = true;
+            PodTerminalBox.CaretIndex = PodTerminalBox.Text.Length;
+        }
+    }
+
+    private void PodTerminalBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (_podShellProcess is null || _podShellProcess.HasExited)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (PodTerminalBox.SelectionStart < _podTerminalInputStart)
+            e.Handled = true;
+    }
+
+    private void PodTerminalBox_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        // Intentionally allow selecting old output so users can copy from the terminal.
+    }
+
+    private void UpdatePodShellTargetText()
+    {
+        var ns = NamespaceList.SelectedItem as string;
+        var pod = PodList.SelectedItem as string;
+        var container = ContainerList.SelectedItem as string;
+
+        PodShellTargetText.Text =
+            ns is null || pod is null || container is null
+                ? "Select namespace, pod, and container"
+                : $"{ns}/{pod}/{container}";
+    }
+
+    private void ResetPodTerminal()
+    {
+        PodTerminalBox.Clear();
+        _podTerminalInputStart = 0;
+        AppendPodTerminalText("Pod terminal ready. Click Connect to start a shell session." + Environment.NewLine);
+    }
+
+    private void AppendPodTerminalText(string text)
+    {
+        Dispatch(() =>
+        {
+            PodTerminalBox.AppendText(text);
+            PodTerminalBox.CaretIndex = PodTerminalBox.Text.Length;
+            PodTerminalBox.ScrollToEnd();
+            _podTerminalInputStart = PodTerminalBox.Text.Length;
+        });
     }
 }
