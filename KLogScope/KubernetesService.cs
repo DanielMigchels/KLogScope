@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using System.Globalization;
 using k8s;
 using k8s.KubeConfigModels;
 using k8s.Models;
@@ -9,6 +11,17 @@ namespace KubeLogViewer;
 public record ClusterItem(string DisplayName, string KubeconfigPath, string ContextName)
 {
     public override string ToString() => DisplayName;
+}
+
+public record NodeTopMetric(
+    string Name,
+    string CpuCores,
+    double? CpuPercent,
+    string MemoryBytes,
+    double? MemoryPercent)
+{
+    public string CpuPercentDisplay => CpuPercent.HasValue ? $"{CpuPercent.Value:0.#}%" : "n/a";
+    public string MemoryPercentDisplay => MemoryPercent.HasValue ? $"{MemoryPercent.Value:0.#}%" : "n/a";
 }
 
 /// <summary>
@@ -104,6 +117,84 @@ public class KubernetesService
             tailLines:  tailLines < 0 ? null : tailLines,  // -1 means "All"
             previous:   previous,
             cancellationToken: ct);
+    }
+
+    public async Task<List<NodeTopMetric>> GetTopNodesAsync(
+        string kubeconfigPath,
+        string contextName,
+        CancellationToken ct = default)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "kubectl",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("--kubeconfig");
+        psi.ArgumentList.Add(kubeconfigPath);
+        psi.ArgumentList.Add("--context");
+        psi.ArgumentList.Add(contextName);
+        psi.ArgumentList.Add("top");
+        psi.ArgumentList.Add("nodes");
+        psi.ArgumentList.Add("--no-headers");
+
+        using var process = new Process { StartInfo = psi };
+
+        if (!process.Start())
+            throw new InvalidOperationException("Failed to start kubectl process.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        await process.WaitForExitAsync(ct);
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (process.ExitCode != 0)
+        {
+            var reason = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(reason)
+                ? $"kubectl exited with code {process.ExitCode}."
+                : reason.Trim());
+        }
+
+        return ParseTopNodes(stdout);
+    }
+
+    private static List<NodeTopMetric> ParseTopNodes(string stdout)
+    {
+        var results = new List<NodeTopMetric>();
+        if (string.IsNullOrWhiteSpace(stdout))
+            return results;
+
+        foreach (var rawLine in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var line = rawLine.Replace("\r", string.Empty);
+            var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 5)
+                continue;
+
+            results.Add(new NodeTopMetric(
+                parts[0],
+                parts[1],
+                ParsePercent(parts[2]),
+                parts[3],
+                ParsePercent(parts[4])));
+        }
+
+        return results.OrderBy(n => n.Name).ToList();
+    }
+
+    private static double? ParsePercent(string raw)
+    {
+        var value = raw.Trim().TrimEnd('%');
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
     }
 
     private void EnsureConnected()

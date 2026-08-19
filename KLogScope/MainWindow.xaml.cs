@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows.Input;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace KubeLogViewer;
@@ -37,6 +38,17 @@ public class LogLine : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
+public class NodeStatsRow
+{
+    public string Name { get; set; } = "";
+    public string CpuCores { get; set; } = "";
+    public string CpuPercentDisplay { get; set; } = "n/a";
+    public string MemoryBytes { get; set; } = "";
+    public string MemoryPercentDisplay { get; set; } = "n/a";
+    public double? CpuPercent { get; set; }
+    public double? MemoryPercent { get; set; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MainWindow
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +69,9 @@ public partial class MainWindow : Window
     private readonly object                        _pendingLock  = new();
     private          List<LogLine>                 _pendingLines = new(256);
     private          int                           _nextDisplayIndex; // how many _allLines have been pushed to _displayLines
+    private readonly ObservableCollection<NodeStatsRow> _nodeStats = new();
+    private          DispatcherTimer?                   _nodeStatsTimer;
+    private          bool                               _isRefreshingNodeStats;
 
     // Flush timer – fires on the UI thread every 150 ms
     private DispatcherTimer? _flushTimer;
@@ -69,6 +84,8 @@ public partial class MainWindow : Window
         ApplyWindowBounds();
 
         LogView.ItemsSource = _displayLines;
+        NodeStatsGrid.ItemsSource = _nodeStats;
+        ResetNodeStatsDashboard();
 
         _flushTimer = new DispatcherTimer(
             TimeSpan.FromMilliseconds(150),
@@ -76,6 +93,13 @@ public partial class MainWindow : Window
             FlushPending,
             Dispatcher);
         _flushTimer.Start();
+
+        _nodeStatsTimer = new DispatcherTimer(
+            TimeSpan.FromSeconds(30),
+            DispatcherPriority.Background,
+            NodeStatsTimer_Tick,
+            Dispatcher);
+        SyncNodeStatsTimerState();
 
         RefreshClusterList();
         UpdatePodShellTargetText();
@@ -101,6 +125,7 @@ public partial class MainWindow : Window
         StopStream();
         StopPodShellProcess();
         _flushTimer?.Stop();
+        _nodeStatsTimer?.Stop();
 
         // Persist window state
         if (WindowState == WindowState.Normal)
@@ -246,8 +271,138 @@ public partial class MainWindow : Window
         NamespaceList.Items.Clear();
         PodList.Items.Clear();
         ContainerList.Items.Clear();
+        ResetNodeStatsDashboard();
         RefreshClusterList();
         ConnStatusText.Text = "Not connected";
+    }
+
+    // ─── Node stats dashboard ───────────────────────────────────────────────
+
+    private async void RefreshNodeStatsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshNodeStatsAsync();
+    }
+
+    private void NodeStatsAutoRefreshCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        SyncNodeStatsTimerState();
+    }
+
+    private async void WorkspaceTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, WorkspaceTabControl))
+            return;
+
+        if (ClusterDashboardTab.IsSelected)
+            await RefreshNodeStatsAsync();
+
+        SyncNodeStatsTimerState();
+    }
+
+    private async void NodeStatsTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!ClusterDashboardTab.IsSelected)
+            return;
+
+        await RefreshNodeStatsAsync();
+    }
+
+    private void SyncNodeStatsTimerState()
+    {
+        if (_nodeStatsTimer is null)
+            return;
+
+        if (NodeStatsAutoRefreshCheck.IsChecked == true && ClusterDashboardTab.IsSelected)
+            _nodeStatsTimer.Start();
+        else
+            _nodeStatsTimer.Stop();
+    }
+
+    private async Task RefreshNodeStatsAsync()
+    {
+        if (_isRefreshingNodeStats)
+            return;
+
+        if (ClusterComboBox.SelectedItem is not ClusterItem cluster)
+        {
+            NodeStatsHintText.Text = "Select a cluster to load node metrics.";
+            SetStatus("Select a cluster first.");
+            return;
+        }
+
+        _isRefreshingNodeStats = true;
+        RefreshNodeStatsBtn.IsEnabled = false;
+        try
+        {
+            SetStatus("Loading node metrics…");
+            var metrics = await _k8s.GetTopNodesAsync(cluster.KubeconfigPath, cluster.ContextName);
+
+            _nodeStats.Clear();
+            foreach (var metric in metrics)
+            {
+                _nodeStats.Add(new NodeStatsRow
+                {
+                    Name = metric.Name,
+                    CpuCores = metric.CpuCores,
+                    CpuPercentDisplay = metric.CpuPercentDisplay,
+                    MemoryBytes = metric.MemoryBytes,
+                    MemoryPercentDisplay = metric.MemoryPercentDisplay,
+                    CpuPercent = metric.CpuPercent,
+                    MemoryPercent = metric.MemoryPercent
+                });
+            }
+
+            UpdateNodeStatsSummary(metrics);
+            NodeStatsUpdatedText.Text = $"Last updated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+            NodeStatsHintText.Text = metrics.Count == 0
+                ? "No node metrics returned. Ensure metrics-server is installed and healthy."
+                : $"Loaded {metrics.Count} node metric(s) from {cluster.ContextName}.";
+            SetStatus(metrics.Count == 0 ? "No node metrics returned." : "Node metrics loaded.");
+        }
+        catch (Exception ex)
+        {
+            NodeStatsHintText.Text = $"Failed to load node metrics: {ex.Message}";
+            SetStatus("Failed to load node metrics.");
+        }
+        finally
+        {
+            RefreshNodeStatsBtn.IsEnabled = true;
+            _isRefreshingNodeStats = false;
+        }
+    }
+
+    private void UpdateNodeStatsSummary(List<NodeTopMetric> metrics)
+    {
+        NodeCountValueText.Text = metrics.Count.ToString();
+
+        var cpuSamples = metrics.Where(m => m.CpuPercent.HasValue).Select(m => m.CpuPercent!.Value).ToList();
+        AvgCpuValueText.Text = cpuSamples.Count > 0
+            ? $"{cpuSamples.Average():0.#}%"
+            : "n/a";
+
+        var memSamples = metrics.Where(m => m.MemoryPercent.HasValue).Select(m => m.MemoryPercent!.Value).ToList();
+        AvgMemoryValueText.Text = memSamples.Count > 0
+            ? $"{memSamples.Average():0.#}%"
+            : "n/a";
+
+        var hottest = metrics
+            .Where(m => m.CpuPercent.HasValue)
+            .OrderByDescending(m => m.CpuPercent)
+            .FirstOrDefault();
+        PeakNodeValueText.Text = hottest is null
+            ? "-"
+            : $"{hottest.Name} ({hottest.CpuPercentDisplay})";
+    }
+
+    private void ResetNodeStatsDashboard()
+    {
+        _nodeStats.Clear();
+        NodeCountValueText.Text = "0";
+        AvgCpuValueText.Text = "0%";
+        AvgMemoryValueText.Text = "0%";
+        PeakNodeValueText.Text = "-";
+        NodeStatsUpdatedText.Text = "Last updated: never";
+        NodeStatsHintText.Text = "Select a cluster, then refresh node metrics.";
     }
 
     // ─── Navigation: cluster → namespace → pod → container ──────────────────
@@ -259,6 +414,7 @@ public partial class MainWindow : Window
         StopPodShellProcess();
         StopStream();
         ClearLogs();
+        ResetNodeStatsDashboard();
         NamespaceList.Items.Clear();
         PodList.Items.Clear();
         ContainerList.Items.Clear();
@@ -279,6 +435,9 @@ public partial class MainWindow : Window
             if (_settings.LastNamespace != null &&
                 NamespaceList.Items.Contains(_settings.LastNamespace))
                 NamespaceList.SelectedItem = _settings.LastNamespace;
+
+            if (ClusterDashboardTab.IsSelected)
+                await RefreshNodeStatsAsync();
         }
         catch (Exception ex)
         {
@@ -342,13 +501,44 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PodList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!ClusterDashboardTab.IsSelected)
+            return;
+
+        if (e.OriginalSource is not DependencyObject source)
+            return;
+
+        var item = FindAncestor<ListBoxItem>(source);
+        if (item?.DataContext is not string podName)
+            return;
+
+        if (PodList.SelectedItem is string selectedPod && selectedPod == podName)
+            WorkspaceTabControl.SelectedItem = PodWorkspaceTab;
+    }
+
     private void ContainerList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         StopPodShellProcess();
         UpdatePodShellTargetText();
 
         if (ContainerList.SelectedItem is not string) return;
+
+        if (ClusterDashboardTab.IsSelected)
+            WorkspaceTabControl.SelectedItem = PodWorkspaceTab;
+
         StartStream();
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current != null)
+        {
+            if (current is T typed)
+                return typed;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
     }
 
     // ─── Log streaming ───────────────────────────────────────────────────────

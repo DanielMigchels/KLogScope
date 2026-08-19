@@ -66,6 +66,7 @@
 
                 <GroupBox Grid.Row="2" Header="Pods" Padding="2" Margin="4,0,4,0">
                     <ListBox x:Name="PodList"
+                             PreviewMouseLeftButtonDown="PodList_PreviewMouseLeftButtonDown"
                              SelectionChanged="PodList_SelectionChanged"
                              BorderThickness="0"/>
                 </GroupBox>
@@ -87,157 +88,251 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TabControl Grid.Row="0" Margin="0">
-                    <TabItem Header="Logs">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
+                <TabControl x:Name="WorkspaceTabControl" Grid.Row="0" Margin="0"
+                            SelectionChanged="WorkspaceTabControl_SelectionChanged">
+                    <TabItem x:Name="PodWorkspaceTab" Header="Pod Workspace">
+                        <TabControl Margin="0">
+                            <TabItem Header="Logs">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
 
-                            <!-- Log toolbar -->
-                            <Border Grid.Row="0" Background="#F5F5F5"
-                                    BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
-                                <WrapPanel Margin="6,5,6,5">
+                                    <!-- Log toolbar -->
+                                    <Border Grid.Row="0" Background="#F5F5F5"
+                                            BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+                                        <WrapPanel Margin="6,5,6,5">
 
-                                    <!-- Tail -->
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,2">
-                                        <TextBlock Text="Tail:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                        <ComboBox x:Name="TailComboBox" Width="90" VerticalAlignment="Center"
-                                                  SelectionChanged="TailComboBox_SelectionChanged">
-                                            <ComboBoxItem Tag="100"  Content="Last 100"/>
-                                            <ComboBoxItem Tag="500"  Content="Last 500" IsSelected="True"/>
-                                            <ComboBoxItem Tag="1000" Content="Last 1000"/>
-                                            <ComboBoxItem Tag="5000" Content="Last 5000"/>
-                                            <ComboBoxItem Tag="-1"   Content="All"/>
-                                        </ComboBox>
-                                    </StackPanel>
+                                            <!-- Tail -->
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,2">
+                                                <TextBlock Text="Tail:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                                <ComboBox x:Name="TailComboBox" Width="90" VerticalAlignment="Center"
+                                                          SelectionChanged="TailComboBox_SelectionChanged">
+                                                    <ComboBoxItem Tag="100"  Content="Last 100"/>
+                                                    <ComboBoxItem Tag="500"  Content="Last 500" IsSelected="True"/>
+                                                    <ComboBoxItem Tag="1000" Content="Last 1000"/>
+                                                    <ComboBoxItem Tag="5000" Content="Last 5000"/>
+                                                    <ComboBoxItem Tag="-1"   Content="All"/>
+                                                </ComboBox>
+                                            </StackPanel>
 
-                                    <!-- Auto scroll -->
-                                    <CheckBox x:Name="AutoScrollCheck" Content="Auto Scroll"
-                                              IsChecked="True" VerticalAlignment="Center"
-                                              Margin="0,0,14,2"/>
+                                            <!-- Auto scroll -->
+                                            <CheckBox x:Name="AutoScrollCheck" Content="Auto Scroll"
+                                                      IsChecked="True" VerticalAlignment="Center"
+                                                      Margin="0,0,14,2"/>
 
-                                    <!-- Pause / Resume -->
-                                    <Button x:Name="PauseBtn" Content="Pause" Padding="8,3"
-                                            Margin="0,0,4,2" Click="PauseBtn_Click"/>
+                                            <!-- Pause / Resume -->
+                                            <Button x:Name="PauseBtn" Content="Pause" Padding="8,3"
+                                                    Margin="0,0,4,2" Click="PauseBtn_Click"/>
 
-                                    <!-- Previous container -->
-                                    <CheckBox x:Name="PreviousCheck" Content="Previous Container"
-                                              VerticalAlignment="Center" Margin="0,0,14,2"
-                                              ToolTip="Show logs from the previous (crashed/restarted) container run"
-                                              Checked="PreviousCheck_Changed"
-                                              Unchecked="PreviousCheck_Changed"/>
+                                            <!-- Previous container -->
+                                            <CheckBox x:Name="PreviousCheck" Content="Previous Container"
+                                                      VerticalAlignment="Center" Margin="0,0,14,2"
+                                                      ToolTip="Show logs from the previous (crashed/restarted) container run"
+                                                      Checked="PreviousCheck_Changed"
+                                                      Unchecked="PreviousCheck_Changed"/>
 
-                                    <!-- Clear + Save -->
-                                    <Button Content="Clear" Padding="8,3" Margin="0,0,4,2"
-                                            Click="ClearBtn_Click"/>
-                                    <Button Content="Save Logs" Padding="8,3" Margin="0,0,18,2"
-                                            Click="SaveBtn_Click"/>
+                                            <!-- Clear + Save -->
+                                            <Button Content="Clear" Padding="8,3" Margin="0,0,4,2"
+                                                    Click="ClearBtn_Click"/>
+                                            <Button Content="Save Logs" Padding="8,3" Margin="0,0,18,2"
+                                                    Click="SaveBtn_Click"/>
 
-                                    <!-- Search -->
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
-                                        <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                        <TextBox x:Name="SearchBox" Width="145" VerticalAlignment="Center"
-                                                 TextChanged="SearchBox_TextChanged"/>
-                                        <CheckBox x:Name="SearchCaseCheck" Content="Aa"
-                                                  VerticalAlignment="Center" Margin="4,0,0,0"
-                                                  ToolTip="Case sensitive search"
-                                                  Checked="SearchCaseCheck_Changed"
-                                                  Unchecked="SearchCaseCheck_Changed"/>
-                                    </StackPanel>
+                                            <!-- Search -->
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
+                                                <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                                <TextBox x:Name="SearchBox" Width="145" VerticalAlignment="Center"
+                                                         TextChanged="SearchBox_TextChanged"/>
+                                                <CheckBox x:Name="SearchCaseCheck" Content="Aa"
+                                                          VerticalAlignment="Center" Margin="4,0,0,0"
+                                                          ToolTip="Case sensitive search"
+                                                          Checked="SearchCaseCheck_Changed"
+                                                          Unchecked="SearchCaseCheck_Changed"/>
+                                            </StackPanel>
 
-                                    <!-- Filter -->
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
-                                        <TextBlock Text="Filter:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                        <TextBox x:Name="FilterBox" Width="145" VerticalAlignment="Center"
-                                                 TextChanged="FilterBox_TextChanged"/>
-                                        <CheckBox x:Name="FilterCaseCheck" Content="Aa"
-                                                  VerticalAlignment="Center" Margin="4,0,0,0"
-                                                  ToolTip="Case sensitive filter"
-                                                  Checked="FilterCaseCheck_Changed"
-                                                  Unchecked="FilterCaseCheck_Changed"/>
-                                    </StackPanel>
+                                            <!-- Filter -->
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,2">
+                                                <TextBlock Text="Filter:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                                <TextBox x:Name="FilterBox" Width="145" VerticalAlignment="Center"
+                                                         TextChanged="FilterBox_TextChanged"/>
+                                                <CheckBox x:Name="FilterCaseCheck" Content="Aa"
+                                                          VerticalAlignment="Center" Margin="4,0,0,0"
+                                                          ToolTip="Case sensitive filter"
+                                                          Checked="FilterCaseCheck_Changed"
+                                                          Unchecked="FilterCaseCheck_Changed"/>
+                                            </StackPanel>
 
-                                </WrapPanel>
-                            </Border>
+                                        </WrapPanel>
+                                    </Border>
 
-                            <!-- Log viewer – virtualised for 100 k+ lines -->
-                            <ListBox x:Name="LogView" Grid.Row="1"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                     VirtualizingPanel.ScrollUnit="Item"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                     ScrollViewer.CanContentScroll="True"
-                                     SelectionMode="Extended"
-                                     BorderThickness="0"
-                                     Background="White">
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="Padding"                    Value="2,0"/>
-                                        <Setter Property="MinHeight"                   Value="16"/>
-                                        <Setter Property="HorizontalContentAlignment" Value="Left"/>
-                                        <!-- Remove the selection highlight so users can still copy text -->
-                                        <Style.Triggers>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter Property="Background" Value="#CCE5FF"/>
-                                            </Trigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Text}"
-                                                   Background="{Binding HighlightBackground}"
-                                                   FontFamily="Consolas" FontSize="12"
-                                                   TextWrapping="NoWrap"/>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </Grid>
+                                    <!-- Log viewer – virtualised for 100 k+ lines -->
+                                    <ListBox x:Name="LogView" Grid.Row="1"
+                                             VirtualizingPanel.IsVirtualizing="True"
+                                             VirtualizingPanel.VirtualizationMode="Recycling"
+                                             VirtualizingPanel.ScrollUnit="Item"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                             ScrollViewer.CanContentScroll="True"
+                                             SelectionMode="Extended"
+                                             BorderThickness="0"
+                                             Background="White">
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="Padding"                    Value="2,0"/>
+                                                <Setter Property="MinHeight"                   Value="16"/>
+                                                <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                                                <!-- Remove the selection highlight so users can still copy text -->
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter Property="Background" Value="#CCE5FF"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Text}"
+                                                           Background="{Binding HighlightBackground}"
+                                                           FontFamily="Consolas" FontSize="12"
+                                                           TextWrapping="NoWrap"/>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </TabItem>
+
+                            <TabItem Header="Shell">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <Border Grid.Row="0" Background="#F9F9F9"
+                                            BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
+                                        <WrapPanel Margin="6,5,6,5">
+                                            <TextBlock Text="Pod Shell:" VerticalAlignment="Center" Margin="0,0,5,2"/>
+                                            <ComboBox x:Name="PodShellComboBox" Width="110" Margin="0,0,10,2">
+                                                <ComboBoxItem Tag="/bin/sh" Content="/bin/sh"/>
+                                                <ComboBoxItem Tag="/bin/bash" Content="/bin/bash" IsSelected="True"/>
+                                            </ComboBox>
+
+                                            <TextBlock Text="Target:" VerticalAlignment="Center" Margin="0,0,5,2"/>
+                                            <TextBlock x:Name="PodShellTargetText" Width="280" Margin="0,0,10,2"
+                                                       VerticalAlignment="Center" Text="Select namespace, pod, and container"/>
+
+                                                <Button x:Name="RunShellBtn" Content="Connect" Padding="10,3" Margin="0,0,4,2"
+                                                    Click="RunPodShellBtn_Click"/>
+                                                <Button x:Name="StopShellBtn" Content="Disconnect" Padding="10,3" Margin="0,0,4,2"
+                                                    Click="StopPodShellBtn_Click" IsEnabled="False"/>
+                                            <Button Content="Clear" Padding="10,3" Margin="0,0,0,2"
+                                                    Click="ClearPodShellBtn_Click"/>
+                                        </WrapPanel>
+                                    </Border>
+
+                                            <TextBox x:Name="PodTerminalBox" Grid.Row="1"
+                                             FontFamily="Consolas" FontSize="12"
+                                                 IsReadOnly="True"
+                                             AcceptsReturn="True"
+                                             TextWrapping="NoWrap"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Auto"
+                                                 PreviewKeyDown="PodTerminalBox_PreviewKeyDown"
+                                                 PreviewTextInput="PodTerminalBox_PreviewTextInput"
+                                                 SelectionChanged="PodTerminalBox_SelectionChanged"
+                                             BorderThickness="0"
+                                             Background="White"/>
+                                </Grid>
+                            </TabItem>
+                        </TabControl>
                     </TabItem>
 
-                    <TabItem Header="Shell">
-                        <Grid>
+                    <TabItem x:Name="ClusterDashboardTab" Header="Cluster Dashboard">
+                        <Grid Margin="8,6,8,8">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <Border Grid.Row="0" Background="#F9F9F9"
-                                    BorderBrush="#DDDDDD" BorderThickness="0,0,0,1">
-                                <WrapPanel Margin="6,5,6,5">
-                                    <TextBlock Text="Pod Shell:" VerticalAlignment="Center" Margin="0,0,5,2"/>
-                                    <ComboBox x:Name="PodShellComboBox" Width="110" Margin="0,0,10,2">
-                                        <ComboBoxItem Tag="/bin/sh" Content="/bin/sh"/>
-                                        <ComboBoxItem Tag="/bin/bash" Content="/bin/bash" IsSelected="True"/>
-                                    </ComboBox>
-
-                                    <TextBlock Text="Target:" VerticalAlignment="Center" Margin="0,0,5,2"/>
-                                    <TextBlock x:Name="PodShellTargetText" Width="280" Margin="0,0,10,2"
-                                               VerticalAlignment="Center" Text="Select namespace, pod, and container"/>
-
-                                        <Button x:Name="RunShellBtn" Content="Connect" Padding="10,3" Margin="0,0,4,2"
-                                            Click="RunPodShellBtn_Click"/>
-                                        <Button x:Name="StopShellBtn" Content="Disconnect" Padding="10,3" Margin="0,0,4,2"
-                                            Click="StopPodShellBtn_Click" IsEnabled="False"/>
-                                    <Button Content="Clear" Padding="10,3" Margin="0,0,0,2"
-                                            Click="ClearPodShellBtn_Click"/>
-                                </WrapPanel>
+                            <Border Grid.Row="0" Background="#F5F5F5" CornerRadius="6"
+                                    BorderBrush="#D8D8D8" BorderThickness="1" Padding="8" Margin="0,0,0,8">
+                                <DockPanel LastChildFill="False">
+                                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                        <Button x:Name="RefreshNodeStatsBtn" Content="Refresh" Padding="10,3"
+                                                Click="RefreshNodeStatsBtn_Click"/>
+                                        <CheckBox x:Name="NodeStatsAutoRefreshCheck" Content="Auto refresh (30s)"
+                                                  Margin="12,0,0,0" VerticalAlignment="Center"
+                                                  IsChecked="True"
+                                                  Checked="NodeStatsAutoRefreshCheck_Changed"
+                                                  Unchecked="NodeStatsAutoRefreshCheck_Changed"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="NodeStatsUpdatedText" DockPanel.Dock="Right"
+                                               VerticalAlignment="Center" Foreground="#555"
+                                               Text="Last updated: never"/>
+                                </DockPanel>
                             </Border>
 
-                                    <TextBox x:Name="PodTerminalBox" Grid.Row="1"
-                                     FontFamily="Consolas" FontSize="12"
-                                         IsReadOnly="True"
-                                     AcceptsReturn="True"
-                                     TextWrapping="NoWrap"
-                                     VerticalScrollBarVisibility="Auto"
-                                     HorizontalScrollBarVisibility="Auto"
-                                         PreviewKeyDown="PodTerminalBox_PreviewKeyDown"
-                                         PreviewTextInput="PodTerminalBox_PreviewTextInput"
-                                         SelectionChanged="PodTerminalBox_SelectionChanged"
-                                     BorderThickness="0"
-                                     Background="White"/>
+                            <UniformGrid Grid.Row="1" Columns="4" Margin="0,0,0,8">
+                                <Border Background="#EEF4FF" BorderBrush="#D3E2FF" BorderThickness="1"
+                                        CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Nodes" FontSize="12" Foreground="#2E4A7D"/>
+                                        <TextBlock x:Name="NodeCountValueText" Text="0" FontSize="22"
+                                                   FontWeight="SemiBold" Foreground="#1A305C"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#ECFFF4" BorderBrush="#C8EED9" BorderThickness="1"
+                                        CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Avg CPU" FontSize="12" Foreground="#2A6A44"/>
+                                        <TextBlock x:Name="AvgCpuValueText" Text="0%" FontSize="22"
+                                                   FontWeight="SemiBold" Foreground="#1E5135"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#FFF8EA" BorderBrush="#F2DEB5" BorderThickness="1"
+                                        CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Avg Memory" FontSize="12" Foreground="#8A5D12"/>
+                                        <TextBlock x:Name="AvgMemoryValueText" Text="0%" FontSize="22"
+                                                   FontWeight="SemiBold" Foreground="#6A460C"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#FFF0F0" BorderBrush="#F0D0D0" BorderThickness="1"
+                                        CornerRadius="6" Padding="10" Margin="0">
+                                    <StackPanel>
+                                        <TextBlock Text="Top CPU Node" FontSize="12" Foreground="#7F2F2F"/>
+                                        <TextBlock x:Name="PeakNodeValueText" Text="-" FontSize="18"
+                                                   FontWeight="SemiBold" Foreground="#612323"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+
+                            <DataGrid x:Name="NodeStatsGrid" Grid.Row="2"
+                                      AutoGenerateColumns="False"
+                                      IsReadOnly="True"
+                                      CanUserAddRows="False"
+                                      CanUserDeleteRows="False"
+                                      CanUserResizeRows="False"
+                                      GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column"
+                                      RowHeaderWidth="0"
+                                      SelectionMode="Single"
+                                      BorderThickness="1"
+                                      BorderBrush="#D8D8D8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Node" Binding="{Binding Name}" Width="2*"/>
+                                    <DataGridTextColumn Header="CPU (cores)" Binding="{Binding CpuCores}" Width="*"/>
+                                    <DataGridTextColumn Header="CPU %" Binding="{Binding CpuPercentDisplay}" Width="*"/>
+                                    <DataGridTextColumn Header="Memory" Binding="{Binding MemoryBytes}" Width="*"/>
+                                    <DataGridTextColumn Header="Memory %" Binding="{Binding MemoryPercentDisplay}" Width="*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <TextBlock x:Name="NodeStatsHintText" Grid.Row="3" Margin="2,8,0,0"
+                                       Foreground="#666" Text="Select a cluster, then refresh node metrics."/>
                         </Grid>
                     </TabItem>
                 </TabControl>
