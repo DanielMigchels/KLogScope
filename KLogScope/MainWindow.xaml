@@ -313,6 +313,7 @@
                             <DataGrid x:Name="NodeStatsGrid" Grid.Row="2"
                                       AutoGenerateColumns="False"
                                       IsReadOnly="True"
+                                      SelectionChanged="NodeStatsGrid_SelectionChanged"
                                       CanUserAddRows="False"
                                       CanUserDeleteRows="False"
                                       CanUserResizeRows="False"
@@ -324,10 +325,28 @@
                                       BorderBrush="#D8D8D8">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="Node" Binding="{Binding Name}" Width="2*"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding SchedulingStatusDisplay}" Width="1.3*"/>
+                                    <DataGridTextColumn Header="Running Pods" Binding="{Binding RunningPodCountDisplay}" Width="*"/>
                                     <DataGridTextColumn Header="CPU (cores)" Binding="{Binding CpuCores}" Width="*"/>
                                     <DataGridTextColumn Header="CPU %" Binding="{Binding CpuPercentDisplay}" Width="*"/>
                                     <DataGridTextColumn Header="Memory" Binding="{Binding MemoryBytes}" Width="*"/>
                                     <DataGridTextColumn Header="Memory %" Binding="{Binding MemoryPercentDisplay}" Width="*"/>
+                                    <DataGridTemplateColumn Header="Action" Width="1.2*">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Grid>
+                                                    <Button Content="Drain"
+                                                            Padding="8,2"
+                                                            Click="RowDrainNodeBtn_Click"
+                                                            Visibility="{Binding DrainButtonVisibility}"/>
+                                                    <Button Content="Uncordon"
+                                                            Padding="8,2"
+                                                            Click="RowUncordonNodeBtn_Click"
+                                                            Visibility="{Binding UncordonButtonVisibility}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
 

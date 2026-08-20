@@ -1,6 +1,7 @@
 using System.IO;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using k8s;
 using k8s.KubeConfigModels;
 using k8s.Models;
@@ -85,6 +86,19 @@ public class KubernetesService
             .ToList();
     }
 
+    public async Task<Dictionary<string, int>> GetRunningPodCountsByNodeAsync(CancellationToken ct = default)
+    {
+        EnsureConnected();
+        var result = await _client!.CoreV1.ListPodForAllNamespacesAsync(
+            fieldSelector: "status.phase=Running",
+            cancellationToken: ct);
+
+        return result.Items
+            .Where(p => !string.IsNullOrWhiteSpace(p.Spec?.NodeName))
+            .GroupBy(p => p.Spec!.NodeName!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+    }
+
     public async Task<List<string>> GetContainersAsync(string ns, string podName, CancellationToken ct = default)
     {
         EnsureConnected();
@@ -165,6 +179,149 @@ public class KubernetesService
         return ParseTopNodes(stdout);
     }
 
+    public async Task<Dictionary<string, bool>> GetNodeSchedulingStatesAsync(
+        string kubeconfigPath,
+        string contextName,
+        CancellationToken ct = default)
+    {
+        var args = new[]
+        {
+            "get",
+            "nodes",
+            "-o",
+            "custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable",
+            "--no-headers"
+        };
+
+        var output = await RunKubectlCaptureOutputAsync(kubeconfigPath, contextName, args, ct);
+        return ParseNodeSchedulingStates(output);
+    }
+
+    public async Task DrainNodeAsync(
+        string kubeconfigPath,
+        string contextName,
+        string nodeName,
+        CancellationToken ct = default)
+    {
+        var args = new[]
+        {
+            "drain",
+            nodeName,
+            "--ignore-daemonsets",
+            "--delete-emptydir-data",
+            "--force"
+        };
+
+        await RunKubectlAsync(kubeconfigPath, contextName, args, ct);
+    }
+
+    public async Task UncordonNodeAsync(
+        string kubeconfigPath,
+        string contextName,
+        string nodeName,
+        CancellationToken ct = default)
+    {
+        var args = new[]
+        {
+            "uncordon",
+            nodeName
+        };
+
+        await RunKubectlAsync(kubeconfigPath, contextName, args, ct);
+    }
+
+    private static async Task RunKubectlAsync(
+        string kubeconfigPath,
+        string contextName,
+        IEnumerable<string> kubectlArgs,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "kubectl",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("--kubeconfig");
+        psi.ArgumentList.Add(kubeconfigPath);
+        psi.ArgumentList.Add("--context");
+        psi.ArgumentList.Add(contextName);
+
+        foreach (var arg in kubectlArgs)
+            psi.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = psi };
+
+        if (!process.Start())
+            throw new InvalidOperationException("Failed to start kubectl process.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        await process.WaitForExitAsync(ct);
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (process.ExitCode != 0)
+        {
+            var reason = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(reason)
+                ? $"kubectl exited with code {process.ExitCode}."
+                : reason.Trim());
+        }
+    }
+
+    private static async Task<string> RunKubectlCaptureOutputAsync(
+        string kubeconfigPath,
+        string contextName,
+        IEnumerable<string> kubectlArgs,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "kubectl",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("--kubeconfig");
+        psi.ArgumentList.Add(kubeconfigPath);
+        psi.ArgumentList.Add("--context");
+        psi.ArgumentList.Add(contextName);
+
+        foreach (var arg in kubectlArgs)
+            psi.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = psi };
+
+        if (!process.Start())
+            throw new InvalidOperationException("Failed to start kubectl process.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        await process.WaitForExitAsync(ct);
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (process.ExitCode != 0)
+        {
+            var reason = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(reason)
+                ? $"kubectl exited with code {process.ExitCode}."
+                : reason.Trim());
+        }
+
+        return stdout;
+    }
+
     private static List<NodeTopMetric> ParseTopNodes(string stdout)
     {
         var results = new List<NodeTopMetric>();
@@ -195,6 +352,28 @@ public class KubernetesService
         return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : null;
+    }
+
+    private static Dictionary<string, bool> ParseNodeSchedulingStates(string stdout)
+    {
+        var result = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(stdout))
+            return result;
+
+        foreach (var rawLine in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var line = rawLine.Replace("\r", string.Empty);
+            var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                continue;
+
+            var nodeName = parts[0];
+            var unschedulableRaw = parts.Length > 1 ? parts[1] : string.Empty;
+            var isSchedulingDisabled = string.Equals(unschedulableRaw, "true", StringComparison.OrdinalIgnoreCase);
+            result[nodeName] = isSchedulingDisabled;
+        }
+
+        return result;
     }
 
     private void EnsureConnected()

@@ -41,6 +41,21 @@ public class LogLine : INotifyPropertyChanged
 public class NodeStatsRow
 {
     public string Name { get; set; } = "";
+    public bool? IsSchedulingDisabled { get; set; }
+    public string SchedulingStatusDisplay => IsSchedulingDisabled switch
+    {
+        true => "SchedulingDisabled",
+        false => "Schedulable",
+        _ => "Unknown"
+    };
+    public Visibility DrainButtonVisibility => IsSchedulingDisabled == false
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+    public Visibility UncordonButtonVisibility => IsSchedulingDisabled == true
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+    public int? RunningPodCount { get; set; }
+    public string RunningPodCountDisplay => RunningPodCount?.ToString() ?? "n/a";
     public string CpuCores { get; set; } = "";
     public string CpuPercentDisplay { get; set; } = "n/a";
     public string MemoryBytes { get; set; } = "";
@@ -72,6 +87,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<NodeStatsRow> _nodeStats = new();
     private          DispatcherTimer?                   _nodeStatsTimer;
     private          bool                               _isRefreshingNodeStats;
+    private          bool                               _isRunningNodeAction;
 
     // Flush timer – fires on the UI thread every 150 ms
     private DispatcherTimer? _flushTimer;
@@ -283,6 +299,81 @@ public partial class MainWindow : Window
         await RefreshNodeStatsAsync();
     }
 
+    private void NodeStatsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateNodeActionState();
+    }
+
+    private async void RowDrainNodeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: NodeStatsRow selectedNode })
+            return;
+
+        if (ClusterComboBox.SelectedItem is not ClusterItem cluster)
+        {
+            SetStatus("Select a cluster first.");
+            return;
+        }
+
+        await DrainNodeAsync(selectedNode, cluster);
+    }
+
+    private async Task DrainNodeAsync(NodeStatsRow selectedNode, ClusterItem cluster)
+    {
+        if (selectedNode.IsSchedulingDisabled == true)
+        {
+            SetStatus($"Node {selectedNode.Name} is already SchedulingDisabled.");
+            return;
+        }
+
+        var decision = MessageBox.Show(
+            $"Drain node '{selectedNode.Name}'?\n\nThis will evict workloads and mark the node unschedulable.",
+            "Confirm drain node",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (decision != MessageBoxResult.Yes)
+            return;
+
+        await RunNodeActionAsync(
+            async ct => await _k8s.DrainNodeAsync(cluster.KubeconfigPath, cluster.ContextName, selectedNode.Name, ct),
+            $"Draining node {selectedNode.Name}…",
+            $"Node {selectedNode.Name} drained.",
+            "Failed to drain node.",
+            selectedNode.Name);
+    }
+
+    private async void RowUncordonNodeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: NodeStatsRow selectedNode })
+            return;
+
+        if (ClusterComboBox.SelectedItem is not ClusterItem cluster)
+        {
+            SetStatus("Select a cluster first.");
+            return;
+        }
+
+        await UncordonNodeAsync(selectedNode, cluster);
+    }
+
+    private async Task UncordonNodeAsync(NodeStatsRow selectedNode, ClusterItem cluster)
+    {
+        if (selectedNode.IsSchedulingDisabled == false)
+        {
+            SetStatus($"Node {selectedNode.Name} is already schedulable.");
+            return;
+        }
+
+        await RunNodeActionAsync(
+            async ct => await _k8s.UncordonNodeAsync(cluster.KubeconfigPath, cluster.ContextName, selectedNode.Name, ct),
+            $"Uncordoning node {selectedNode.Name}…",
+            $"Node {selectedNode.Name} uncordoned.",
+            "Failed to uncordon node.",
+            selectedNode.Name);
+    }
+
     private void NodeStatsAutoRefreshCheck_Changed(object sender, RoutedEventArgs e)
     {
         SyncNodeStatsTimerState();
@@ -332,17 +423,36 @@ public partial class MainWindow : Window
 
         _isRefreshingNodeStats = true;
         RefreshNodeStatsBtn.IsEnabled = false;
+        UpdateNodeActionState();
         try
         {
             SetStatus("Loading node metrics…");
             var metrics = await _k8s.GetTopNodesAsync(cluster.KubeconfigPath, cluster.ContextName);
+            var schedulingStates = await _k8s.GetNodeSchedulingStatesAsync(cluster.KubeconfigPath, cluster.ContextName);
+            Dictionary<string, int>? runningPodCounts = null;
+            string? podCountWarning = null;
+
+            try
+            {
+                runningPodCounts = await _k8s.GetRunningPodCountsByNodeAsync();
+            }
+            catch (Exception ex)
+            {
+                podCountWarning = ex.Message;
+            }
 
             _nodeStats.Clear();
             foreach (var metric in metrics)
             {
+                schedulingStates.TryGetValue(metric.Name, out var isSchedulingDisabled);
+                var runningPodCount = 0;
+                var hasPodCount = runningPodCounts is not null && runningPodCounts.TryGetValue(metric.Name, out runningPodCount);
+
                 _nodeStats.Add(new NodeStatsRow
                 {
                     Name = metric.Name,
+                    IsSchedulingDisabled = schedulingStates.ContainsKey(metric.Name) ? isSchedulingDisabled : null,
+                    RunningPodCount = hasPodCount ? runningPodCount : null,
                     CpuCores = metric.CpuCores,
                     CpuPercentDisplay = metric.CpuPercentDisplay,
                     MemoryBytes = metric.MemoryBytes,
@@ -356,18 +466,23 @@ public partial class MainWindow : Window
             NodeStatsUpdatedText.Text = $"Last updated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
             NodeStatsHintText.Text = metrics.Count == 0
                 ? "No node metrics returned. Ensure metrics-server is installed and healthy."
-                : $"Loaded {metrics.Count} node metric(s) from {cluster.ContextName}.";
+                : podCountWarning is null
+                    ? $"Loaded {metrics.Count} node metric(s) from {cluster.ContextName}."
+                    : $"Loaded {metrics.Count} node metric(s), but running pod counts are unavailable: {podCountWarning}";
             SetStatus(metrics.Count == 0 ? "No node metrics returned." : "Node metrics loaded.");
+            UpdateNodeActionState();
         }
         catch (Exception ex)
         {
             NodeStatsHintText.Text = $"Failed to load node metrics: {ex.Message}";
             SetStatus("Failed to load node metrics.");
+            UpdateNodeActionState();
         }
         finally
         {
             RefreshNodeStatsBtn.IsEnabled = true;
             _isRefreshingNodeStats = false;
+            UpdateNodeActionState();
         }
     }
 
@@ -397,12 +512,60 @@ public partial class MainWindow : Window
     private void ResetNodeStatsDashboard()
     {
         _nodeStats.Clear();
+        NodeStatsGrid.SelectedItem = null;
         NodeCountValueText.Text = "0";
         AvgCpuValueText.Text = "0%";
         AvgMemoryValueText.Text = "0%";
         PeakNodeValueText.Text = "-";
         NodeStatsUpdatedText.Text = "Last updated: never";
         NodeStatsHintText.Text = "Select a cluster, then refresh node metrics.";
+        UpdateNodeActionState();
+    }
+
+    private async Task RunNodeActionAsync(
+        Func<CancellationToken, Task> action,
+        string runningStatus,
+        string successStatus,
+        string failureStatus,
+        string selectedNode)
+    {
+        if (_isRunningNodeAction)
+            return;
+
+        _isRunningNodeAction = true;
+        UpdateNodeActionState();
+
+        try
+        {
+            SetStatus(runningStatus);
+            using var cts = new CancellationTokenSource();
+            await action(cts.Token);
+            SetStatus(successStatus);
+
+            await RefreshNodeStatsAsync();
+            ReselectNode(selectedNode);
+        }
+        catch (Exception ex)
+        {
+            NodeStatsHintText.Text = ex.Message;
+            SetStatus(failureStatus);
+        }
+        finally
+        {
+            _isRunningNodeAction = false;
+            UpdateNodeActionState();
+        }
+    }
+
+    private void ReselectNode(string nodeName)
+    {
+        var match = _nodeStats.FirstOrDefault(n => string.Equals(n.Name, nodeName, StringComparison.Ordinal));
+        NodeStatsGrid.SelectedItem = match;
+    }
+
+    private void UpdateNodeActionState()
+    {
+        NodeStatsGrid.IsEnabled = !_isRefreshingNodeStats && !_isRunningNodeAction;
     }
 
     // ─── Navigation: cluster → namespace → pod → container ──────────────────
